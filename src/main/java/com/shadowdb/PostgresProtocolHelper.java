@@ -1,9 +1,14 @@
 package com.shadowdb;
 
+import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
+import java.io.DataInputStream;
 import java.io.DataOutputStream;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
 
 /**
  * Helper class for PostgreSQL Frontend/Backend Protocol 3.0 framing and parsing.
@@ -15,6 +20,18 @@ public class PostgresProtocolHelper {
     public static final byte MESSAGE_TYPE_DATA_ROW = 'D';
     public static final byte MESSAGE_TYPE_COMMAND_COMPLETE = 'C';
     public static final byte MESSAGE_TYPE_READY_FOR_QUERY = 'Z';
+
+    public record QueryResult(
+            boolean isSelect,
+            List<String> columns,
+            List<List<String>> rows,
+            String commandTag,
+            int rowCount
+    ) {
+        public static QueryResult empty() {
+            return new QueryResult(false, Collections.emptyList(), Collections.emptyList(), "EMPTY", 0);
+        }
+    }
 
     /**
      * Checks whether the given byte array ends with a PostgreSQL 'ReadyForQuery' (Z) packet.
@@ -48,41 +65,66 @@ public class PostgresProtocolHelper {
     }
 
     /**
-     * Creates a mock PostgreSQL Backend response for a SELECT query containing one column and one row.
+     * Creates a multi-column, multi-row PostgreSQL Backend response for a SELECT query.
      */
-    public static byte[] createMockSelectResponse(String columnName, String value) {
+    public static byte[] createSelectResponse(List<String> columnNames, List<List<String>> rows) {
         try (ByteArrayOutputStream baos = new ByteArrayOutputStream();
              DataOutputStream dos = new DataOutputStream(baos)) {
 
             // 1. RowDescription ('T')
-            byte[] colBytes = columnName.getBytes(StandardCharsets.UTF_8);
-            int rowDescLen = 4 + 2 + (colBytes.length + 1 + 4 + 2 + 4 + 2 + 4 + 2);
             dos.writeByte(MESSAGE_TYPE_ROW_DESCRIPTION);
-            dos.writeInt(rowDescLen);
-            dos.writeShort(1); // 1 column
-            dos.write(colBytes);
-            dos.writeByte(0); // null terminator for col name
-            dos.writeInt(0);  // table OID
-            dos.writeShort(1); // column attribute number
-            dos.writeInt(25);  // data type OID (TEXT)
-            dos.writeShort(-1); // data type size
-            dos.writeInt(-1);  // type modifier
-            dos.writeShort(0); // format code (text)
+            int fieldsLen = 0;
+            for (String col : columnNames) {
+                byte[] colBytes = col.getBytes(StandardCharsets.UTF_8);
+                fieldsLen += (colBytes.length + 1 + 18);
+            }
+            dos.writeInt(4 + 2 + fieldsLen);
+            dos.writeShort(columnNames.size());
+            short colAttr = 1;
+            for (String col : columnNames) {
+                byte[] colBytes = col.getBytes(StandardCharsets.UTF_8);
+                dos.write(colBytes);
+                dos.writeByte(0); // null terminator
+                dos.writeInt(0);  // table OID
+                dos.writeShort(colAttr++);
+                dos.writeInt(25); // data type OID (TEXT)
+                dos.writeShort(-1); // data type size
+                dos.writeInt(-1); // type modifier
+                dos.writeShort(0); // format code (text)
+            }
 
             // 2. DataRow ('D')
-            byte[] valBytes = value.getBytes(StandardCharsets.UTF_8);
-            int dataRowLen = 4 + 2 + (4 + valBytes.length);
-            dos.writeByte(MESSAGE_TYPE_DATA_ROW);
-            dos.writeInt(dataRowLen);
-            dos.writeShort(1); // 1 column value
-            dos.writeInt(valBytes.length);
-            dos.write(valBytes);
+            if (rows != null) {
+                for (List<String> row : rows) {
+                    dos.writeByte(MESSAGE_TYPE_DATA_ROW);
+                    int rowLen = 4 + 2;
+                    for (String val : row) {
+                        if (val == null) {
+                            rowLen += 4;
+                        } else {
+                            byte[] valBytes = val.getBytes(StandardCharsets.UTF_8);
+                            rowLen += (4 + valBytes.length);
+                        }
+                    }
+                    dos.writeInt(rowLen);
+                    dos.writeShort(row.size());
+                    for (String val : row) {
+                        if (val == null) {
+                            dos.writeInt(-1);
+                        } else {
+                            byte[] valBytes = val.getBytes(StandardCharsets.UTF_8);
+                            dos.writeInt(valBytes.length);
+                            dos.write(valBytes);
+                        }
+                    }
+                }
+            }
 
             // 3. CommandComplete ('C')
-            byte[] tagBytes = "SELECT 1".getBytes(StandardCharsets.UTF_8);
-            int cmdCompleteLen = 4 + tagBytes.length + 1;
+            int count = (rows != null) ? rows.size() : 0;
+            byte[] tagBytes = ("SELECT " + count).getBytes(StandardCharsets.UTF_8);
             dos.writeByte(MESSAGE_TYPE_COMMAND_COMPLETE);
-            dos.writeInt(cmdCompleteLen);
+            dos.writeInt(4 + tagBytes.length + 1);
             dos.write(tagBytes);
             dos.writeByte(0);
 
@@ -94,8 +136,15 @@ public class PostgresProtocolHelper {
             dos.flush();
             return baos.toByteArray();
         } catch (IOException e) {
-            throw new RuntimeException("Failed to construct mock SELECT response", e);
+            throw new RuntimeException("Failed to construct SELECT response", e);
         }
+    }
+
+    /**
+     * Creates a mock PostgreSQL Backend response for a SELECT query containing one column and one row.
+     */
+    public static byte[] createMockSelectResponse(String columnName, String value) {
+        return createSelectResponse(List.of(columnName), List.of(List.of(value)));
     }
 
     /**
@@ -122,6 +171,85 @@ public class PostgresProtocolHelper {
             return baos.toByteArray();
         } catch (IOException e) {
             throw new RuntimeException("Failed to construct mock command complete response", e);
+        }
+    }
+
+    /**
+     * Decodes PostgreSQL wire protocol response bytes into a structured QueryResult.
+     */
+    public static QueryResult decodeQueryResult(byte[] data) {
+        if (data == null || data.length < 5) {
+            return QueryResult.empty();
+        }
+
+        try (ByteArrayInputStream bais = new ByteArrayInputStream(data);
+             DataInputStream dis = new DataInputStream(bais)) {
+
+            List<String> columns = new ArrayList<>();
+            List<List<String>> rows = new ArrayList<>();
+            String commandTag = "UNKNOWN";
+            boolean isSelect = false;
+
+            while (dis.available() > 0) {
+                byte type = dis.readByte();
+                int length = dis.readInt();
+                int payloadLength = length - 4;
+
+                if (type == MESSAGE_TYPE_ROW_DESCRIPTION) {
+                    isSelect = true;
+                    short numFields = dis.readShort();
+                    columns = new ArrayList<>(numFields);
+                    for (int i = 0; i < numFields; i++) {
+                        ByteArrayOutputStream strBuf = new ByteArrayOutputStream();
+                        byte b;
+                        while ((b = dis.readByte()) != 0) {
+                            strBuf.write(b);
+                        }
+                        columns.add(strBuf.toString(StandardCharsets.UTF_8));
+                        dis.readInt();   // table OID
+                        dis.readShort(); // col attr
+                        dis.readInt();   // type OID
+                        dis.readShort(); // type size
+                        dis.readInt();   // type mod
+                        dis.readShort(); // format code
+                    }
+                } else if (type == MESSAGE_TYPE_DATA_ROW) {
+                    short numCols = dis.readShort();
+                    List<String> row = new ArrayList<>(numCols);
+                    for (int i = 0; i < numCols; i++) {
+                        int valLen = dis.readInt();
+                        if (valLen == -1) {
+                            row.add(null);
+                        } else {
+                            byte[] valBytes = new byte[valLen];
+                            dis.readFully(valBytes);
+                            row.add(new String(valBytes, StandardCharsets.UTF_8));
+                        }
+                    }
+                    rows.add(row);
+                } else if (type == MESSAGE_TYPE_COMMAND_COMPLETE) {
+                    byte[] tagBytes = new byte[payloadLength];
+                    dis.readFully(tagBytes);
+                    int effLen = payloadLength;
+                    while (effLen > 0 && tagBytes[effLen - 1] == 0) {
+                        effLen--;
+                    }
+                    commandTag = new String(tagBytes, 0, effLen, StandardCharsets.UTF_8);
+                } else if (type == MESSAGE_TYPE_READY_FOR_QUERY) {
+                    if (payloadLength > 0) {
+                        dis.skipBytes(payloadLength);
+                    }
+                    break;
+                } else {
+                    if (payloadLength > 0) {
+                        dis.skipBytes(payloadLength);
+                    }
+                }
+            }
+
+            return new QueryResult(isSelect, columns, rows, commandTag, rows.size());
+        } catch (Exception e) {
+            return new QueryResult(false, List.of(), List.of(), "ERROR: " + e.getMessage(), 0);
         }
     }
 }

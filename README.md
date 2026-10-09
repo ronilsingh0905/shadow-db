@@ -86,9 +86,18 @@ From [`ShadowDbPoCTest.java`](src/test/java/com/shadowdb/ShadowDbPoCTest.java):
 mvn clean test
 ```
 
-### Run the Interactive Live Demonstration
+### Run the Interactive Web Showcase (Teacher / Evaluator Presentation)
 ```bash
 mvn compile exec:java
+```
+Once started, open **`http://localhost:8080`** in your browser. This spins up:
+1. **Mock PostgreSQL Database** (Port `5433`) simulating realistic database seek latency (~140ms).
+2. **Shadow-DB Netty Proxy** (Port `5432`) intercepting PostgreSQL Frontend 3.0 queries.
+3. **Interactive Web Dashboard** (Port `8080`) featuring the ApexMart Storefront, real-time packet flow visualization, latency charts, and a **3-Step Guided Teacher Presentation Mode**.
+
+### Run the CLI Demonstration (Alternative)
+```bash
+mvn compile exec:java -Dexec.mainClass="com.shadowdb.DemoRunner"
 ```
 
 ### Run the Proxy Server Standalone
@@ -110,15 +119,22 @@ shadow-db/
 ├── .gitignore
 ├── README.md
 └── src/
-    ├── main/java/com/shadowdb/
-    │   ├── Server.java                 # Netty TCP proxy server
-    │   ├── ProxyHandler.java           # Pipeline handler & cache interceptor
-    │   ├── QueryParser.java            # JSqlParser AST & SHA-256 hasher (Module 1)
-    │   ├── CacheManager.java           # D1 Caffeine & D2 reverse index (Module 2)
-    │   ├── PostgresProtocolHelper.java # PG 3.0 wire protocol serializer
-    │   └── DemoRunner.java             # Standalone interactive showcase
+    ├── main/
+    │   ├── java/com/shadowdb/
+    │   │   ├── Server.java                 # Netty TCP proxy server
+    │   │   ├── ProxyHandler.java           # Pipeline handler & cache interceptor
+    │   │   ├── QueryParser.java            # JSqlParser AST & SHA-256 hasher (Module 2)
+    │   │   ├── CacheManager.java           # D1 Caffeine & D2 reverse index (Module 3 & 4)
+    │   │   ├── PostgresProtocolHelper.java # PG 3.0 wire protocol serializer/deserializer
+    │   │   ├── MockPostgresDatabase.java   # High-fidelity simulated PostgreSQL backend
+    │   │   ├── ShowcaseServer.java         # Orchestrator & embedded HTTP server (Port 8080)
+    │   │   └── DemoRunner.java             # Standalone CLI showcase
+    │   └── resources/web/
+    │       ├── index.html                  # Sleek dark-mode dashboard UI
+    │       ├── style.css                   # Glassmorphism design system & animations
+    │       └── app.js                      # Reactive frontend controller & topology
     └── test/java/com/shadowdb/
-        └── ShadowDbPoCTest.java        # Comprehensive JUnit 5 test suite
+        └── ShadowDbPoCTest.java            # Comprehensive JUnit 5 test suite
 ```
 
 ---

@@ -7,6 +7,9 @@ import org.slf4j.LoggerFactory;
 
 import java.util.Collection;
 import java.util.Collections;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
@@ -171,5 +174,15 @@ public class    CacheManager {
 
     public long getInvalidationCount() {
         return invalidationCounter.get();
+    }
+
+    public Map<String, Set<String>> getD2TableIndex() {
+        Map<String, Set<String>> copy = new HashMap<>();
+        d2TableIndex.forEach((k, v) -> copy.put(k, new HashSet<>(v)));
+        return Collections.unmodifiableMap(copy);
+    }
+
+    public Set<String> getD1Keys() {
+        return Collections.unmodifiableSet(new HashSet<>(d1Cache.asMap().keySet()));
     }
 }

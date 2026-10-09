@@ -1,0 +1,380 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Shadow-DB | High-Performance In-Memory PostgreSQL Caching Proxy</title>
+    <meta name="description" content="Live demonstration and telemetry dashboard for Shadow-DB: Transparent PostgreSQL caching proxy with sub-3ms SLA and reactive cache invalidation.">
+    <!-- Google Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;700&family=Outfit:wght@500;600;700;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <!-- Background Glow Elements -->
+    <div class="bg-glow glow-top-left"></div>
+    <div class="bg-glow glow-bottom-right"></div>
+
+    <div class="app-container">
+        <!-- TOP NAVIGATION & STATUS -->
+        <header class="navbar">
+            <div class="nav-brand">
+                <div class="logo-icon">
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
+                        <path d="m9 12 2 2 4-4"/>
+                    </svg>
+                </div>
+                <div>
+                    <div class="brand-title">Shadow-DB <span class="badge-tag">PoC Showcase</span></div>
+                    <div class="brand-subtitle">Transparent PostgreSQL In-Memory Caching Proxy</div>
+                </div>
+            </div>
+
+            <!-- Active Ports / Connectivity Pills -->
+            <div class="connection-pills">
+                <div class="status-pill active-proxy" title="Shadow-DB Netty TCP Proxy">
+                    <span class="pulsing-dot green"></span>
+                    <span class="pill-label">Proxy:</span>
+                    <span class="pill-val" id="pill-proxy-port">Port 5432</span>
+                </div>
+                <div class="status-pill active-db" title="PostgreSQL Database Backend">
+                    <span class="pulsing-dot blue"></span>
+                    <span class="pill-label">PostgreSQL:</span>
+                    <span class="pill-val" id="pill-db-port">Port 5433</span>
+                </div>
+                <div class="status-pill active-cache" title="Dual-Index Caffeine Cache">
+                    <span class="pill-label">RAM Engine:</span>
+                    <span class="pill-val">Caffeine + D2 Index</span>
+                </div>
+            </div>
+
+            <div class="nav-actions">
+                <button id="btn-reset-demo" class="btn btn-secondary btn-sm" title="Reset all products and cache to baseline">
+                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M8 16H3v5"/></svg>
+                    Reset Demo
+                </button>
+            </div>
+        </header>
+
+        <!-- TEACHER PRESENTATION GUIDE (WALKTHROUGH STEPPER) -->
+        <section class="teacher-guide-card">
+            <div class="guide-header">
+                <div class="guide-title">
+                    <span class="guide-icon">🎓</span>
+                    <span>Teacher Walkthrough Mode</span>
+                    <span class="guide-badge">3-Step Demo Script</span>
+                </div>
+                <div class="guide-narrative" id="guide-narrative-text">
+                    Follow these 3 steps in sequence to demonstrate the core value proposition to your teacher in under 60 seconds.
+                </div>
+            </div>
+            <div class="guide-steps">
+                <button id="step-btn-1" class="step-card" onclick="runPresentationStep(1)">
+                    <div class="step-num">Step 1</div>
+                    <div class="step-label">Initial Cold Read</div>
+                    <div class="step-desc">First query reaches PostgreSQL (~140ms latency, Cache Miss)</div>
+                </button>
+                <button id="step-btn-2" class="step-card" onclick="runPresentationStep(2)">
+                    <div class="step-num">Step 2</div>
+                    <div class="step-label">Instant Cache Hit</div>
+                    <div class="step-desc">Repeat query served from RAM (~2ms, 0 DB queries sent!)</div>
+                </button>
+                <button id="step-btn-3" class="step-card" onclick="runPresentationStep(3)">
+                    <div class="step-num">Step 3</div>
+                    <div class="step-label">Reactive Invalidation</div>
+                    <div class="step-desc">UPDATE laptop price, D2 purges cache, fresh price loaded!</div>
+                </button>
+            </div>
+        </section>
+
+        <!-- NETWORK PACKET FLOW TOPOLOGY -->
+        <section class="topology-section">
+            <div class="topology-header">
+                <span class="section-title">Network Packet Pipeline (Transparent TCP Wire)</span>
+                <span id="topology-packet-status" class="topology-status-idle">Idle (Waiting for client query...)</span>
+            </div>
+            <div class="topology-diagram">
+                <!-- Node 1: Client App -->
+                <div class="topo-node" id="node-client">
+                    <div class="node-icon">🛒</div>
+                    <div class="node-title">Client Application</div>
+                    <div class="node-meta">ApexMart Web Store</div>
+                </div>
+
+                <!-- Wire 1: Client -> Proxy -->
+                <div class="topo-wire" id="wire-1">
+                    <div class="wire-line"></div>
+                    <div class="packet-particle" id="particle-client-proxy"></div>
+                    <div class="wire-tag">TCP :5432 (Postgres Wire)</div>
+                </div>
+
+                <!-- Node 2: Shadow-DB Proxy -->
+                <div class="topo-node" id="node-proxy">
+                    <div class="node-icon">🛡️</div>
+                    <div class="node-title">Shadow-DB Proxy</div>
+                    <div class="node-meta">JSqlParser + Caffeine RAM</div>
+                    <div class="node-badge" id="proxy-hit-badge">LISTENING</div>
+                </div>
+
+                <!-- Wire 2: Proxy -> PostgreSQL -->
+                <div class="topo-wire" id="wire-2">
+                    <div class="wire-line"></div>
+                    <div class="packet-particle" id="particle-proxy-db"></div>
+                    <div class="wire-tag">TCP :5433 (Backend I/O)</div>
+                </div>
+
+                <!-- Node 3: PostgreSQL Database -->
+                <div class="topo-node" id="node-db">
+                    <div class="node-icon">🐘</div>
+                    <div class="node-title">PostgreSQL Database</div>
+                    <div class="node-meta">Physical Disk Engine</div>
+                    <div class="node-badge" id="db-traffic-badge">IDLE</div>
+                </div>
+            </div>
+        </section>
+
+        <!-- HERO KPI TELEMETRY STRIP -->
+        <section class="kpi-grid">
+            <div class="kpi-card" id="kpi-latency-card">
+                <div class="kpi-header">
+                    <span class="kpi-title">Query Latency</span>
+                    <span class="kpi-badge" id="kpi-speedup-badge">Baseline</span>
+                </div>
+                <div class="kpi-value-row">
+                    <span class="kpi-value" id="kpi-latency-val">--</span>
+                    <span class="kpi-unit">ms</span>
+                </div>
+                <div class="kpi-footer" id="kpi-latency-footer">Awaiting first query</div>
+            </div>
+
+            <div class="kpi-card" id="kpi-status-card">
+                <div class="kpi-header">
+                    <span class="kpi-title">Cache Status</span>
+                    <span class="kpi-icon-indicator" id="kpi-status-icon">⚪</span>
+                </div>
+                <div class="kpi-value-row">
+                    <span class="kpi-value status-text" id="kpi-status-val">READY</span>
+                </div>
+                <div class="kpi-footer" id="kpi-status-footer">TCP Socket connected</div>
+            </div>
+
+            <div class="kpi-card">
+                <div class="kpi-header">
+                    <span class="kpi-title">Database Offload</span>
+                    <span class="kpi-badge badge-green" id="kpi-offload-badge">RAM Ratio</span>
+                </div>
+                <div class="kpi-value-row">
+                    <span class="kpi-value" id="kpi-offload-val">100</span>
+                    <span class="kpi-unit">%</span>
+                </div>
+                <div class="kpi-footer" id="kpi-offload-footer"><span id="kpi-absorbed-count">0</span> queries absorbed by cache</div>
+            </div>
+
+            <div class="kpi-card">
+                <div class="kpi-header">
+                    <span class="kpi-title">PostgreSQL Queries</span>
+                    <span class="kpi-badge badge-blue">Backend Hits</span>
+                </div>
+                <div class="kpi-value-row">
+                    <span class="kpi-value" id="kpi-db-hits">0</span>
+                    <span class="kpi-unit">queries</span>
+                </div>
+                <div class="kpi-footer" id="kpi-db-footer">Zero queries during cache hits</div>
+            </div>
+        </section>
+
+        <!-- MAIN WORKSPACE: STOREFRONT + TELEMETRY INSPECTOR -->
+        <main class="main-workspace">
+            <!-- LEFT PANEL: APEXMART STOREFRONT (THE CONSUMER APP) -->
+            <section class="panel storefront-panel">
+                <div class="panel-header">
+                    <div>
+                        <h2 class="panel-title">🛒 ApexMart Storefront</h2>
+                        <p class="panel-subtitle">Transparent consumer application querying PostgreSQL over TCP port 5432</p>
+                    </div>
+                    <div class="panel-actions">
+                        <button id="btn-simulate-batch" class="btn btn-warning btn-sm" title="Simulate 30 rapid customer requests">
+                            ⚡ Simulate 30 Shoppers
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Category Filters & Query Trigger -->
+                <div class="storefront-toolbar">
+                    <div class="category-tabs" id="category-tabs">
+                        <button class="cat-tab active" data-category="All">All Items</button>
+                        <button class="cat-tab" data-category="Laptops">Laptops</button>
+                        <button class="cat-tab" data-category="Audio">Audio</button>
+                        <button class="cat-tab" data-category="Displays">Displays</button>
+                        <button class="cat-tab" data-category="Accessories">Accessories</button>
+                    </div>
+                    <button id="btn-fetch-products" class="btn btn-primary btn-sm">
+                        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16"/><path d="M16 16h5v5"/></svg>
+                        Execute SELECT
+                    </button>
+                </div>
+
+                <!-- Live SQL Bar -->
+                <div class="sql-banner">
+                    <span class="sql-label">INTERCEPTED SQL:</span>
+                    <code class="sql-code" id="current-sql-display">SELECT id, name, category, price, stock, rating, icon FROM products</code>
+                </div>
+
+                <!-- Products Grid -->
+                <div class="products-grid" id="products-grid">
+                    <!-- Injected dynamically via app.js -->
+                    <div class="loading-state">Loading product catalog via Shadow-DB...</div>
+                </div>
+            </section>
+
+            <!-- RIGHT PANEL: SHADOW-DB TELEMETRY & CACHE INSPECTOR -->
+            <section class="panel inspector-panel">
+                <div class="panel-header">
+                    <div>
+                        <h2 class="panel-title">🛡️ Shadow-DB Telemetry Engine</h2>
+                        <p class="panel-subtitle">Live inspection of Caffeine RAM (D1) and Reverse Table Index (D2)</p>
+                    </div>
+                    <div class="cache-size-pill">
+                        D1 Size: <span id="d1-size-val">0</span> keys
+                    </div>
+                </div>
+
+                <!-- Latency History Bar Chart -->
+                <div class="inspector-card">
+                    <div class="card-header">
+                        <span class="card-title">Real-Time Latency History (Last 12 Queries)</span>
+                        <span class="card-subtitle-tag">Sub-3ms vs ~140ms</span>
+                    </div>
+                    <div class="latency-chart-container" id="latency-chart">
+                        <!-- Bars injected dynamically -->
+                    </div>
+                </div>
+
+                <!-- D1 & D2 Dual-Index Inspector -->
+                <div class="inspector-card">
+                    <div class="card-header">
+                        <span class="card-title">Dual-Index Cache Memory Structure</span>
+                    </div>
+
+                    <!-- D2 Table Reverse Index -->
+                    <div class="index-box">
+                        <div class="index-box-title">
+                            <span class="tag-d2">D2 Reverse Table Index</span>
+                            <span class="index-meta">Maps Table ➔ Set&lt;HashKey&gt; for O(1) reactive eviction</span>
+                        </div>
+                        <div class="d2-table-container" id="d2-table-list">
+                            <div class="empty-d2">No tables currently indexed</div>
+                        </div>
+                    </div>
+
+                    <!-- D1 Result Cache -->
+                    <div class="index-box mt-3">
+                        <div class="index-box-title">
+                            <span class="tag-d1">D1 Caffeine Result Cache</span>
+                            <span class="index-meta">Maps HashKey ➔ Exact PostgreSQL wire response bytes</span>
+                        </div>
+                        <div class="d1-keys-container" id="d1-keys-list">
+                            <div class="empty-d1">Cache is empty (Cold)</div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Live Wire Protocol Event Log -->
+                <div class="inspector-card">
+                    <div class="card-header">
+                        <span class="card-title">PostgreSQL 3.0 Wire Protocol Activity</span>
+                        <button class="btn-text-xs" onclick="clearEventLog()">Clear Log</button>
+                    </div>
+                    <div class="protocol-log" id="protocol-log">
+                        <div class="log-line text-muted">[System] Shadow-DB Proxy listening on port 5432...</div>
+                        <div class="log-line text-muted">[System] Ready to intercept PostgreSQL Frontend 3.0 traffic.</div>
+                    </div>
+                </div>
+            </section>
+        </main>
+    </div>
+
+    <!-- MODAL: EDIT PRICE & STOCK (MUTATION INVOCATION) -->
+    <div class="modal-backdrop" id="edit-modal">
+        <div class="modal-box">
+            <div class="modal-header">
+                <div>
+                    <h3 class="modal-title">✏️ Update Product (Trigger Mutation)</h3>
+                    <p class="modal-subtitle">Will execute <code class="code-inline">UPDATE products</code> through Shadow-DB to verify reactive invalidation</p>
+                </div>
+                <button class="modal-close" onclick="closeEditModal()">&times;</button>
+            </div>
+            <form id="edit-product-form" onsubmit="handleProductUpdate(event)">
+                <input type="hidden" id="edit-product-id">
+                <div class="form-group">
+                    <label class="form-label">Product Name</label>
+                    <input type="text" id="edit-product-name" class="form-input" disabled>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label class="form-label">Price ($ USD)</label>
+                        <input type="number" id="edit-product-price" class="form-input" step="0.01" min="1" required>
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">Inventory Stock</label>
+                        <input type="number" id="edit-product-stock" class="form-input" min="0" required>
+                    </div>
+                </div>
+                <div class="mutation-alert">
+                    <span class="alert-icon">⚡</span>
+                    <div>
+                        <strong>What will happen:</strong> Shadow-DB will detect the <code class="code-inline">UPDATE products</code> mutation, immediately evict all associated query keys from <code class="code-inline">D1</code> via <code class="code-inline">D2</code> table index, and guarantee zero stale reads!
+                    </div>
+                </div>
+                <div class="modal-actions">
+                    <button type="button" class="btn btn-secondary" onclick="closeEditModal()">Cancel</button>
+                    <button type="submit" class="btn btn-danger" id="btn-save-mutation">
+                        Save & Invalidate Cache
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- BATCH SIMULATION MODAL -->
+    <div class="modal-backdrop" id="batch-modal">
+        <div class="modal-box">
+            <div class="modal-header">
+                <div>
+                    <h3 class="modal-title">🚀 Shopper Traffic Simulation Results</h3>
+                    <p class="modal-subtitle">Simulated 30 rapid customer requests through Shadow-DB</p>
+                </div>
+                <button class="modal-close" onclick="closeBatchModal()">&times;</button>
+            </div>
+            <div class="batch-results-grid">
+                <div class="batch-stat">
+                    <div class="batch-stat-val text-green" id="batch-hit-count">29</div>
+                    <div class="batch-stat-lbl">Cache Hits</div>
+                </div>
+                <div class="batch-stat">
+                    <div class="batch-stat-val text-amber" id="batch-miss-count">1</div>
+                    <div class="batch-stat-lbl">Cache Misses</div>
+                </div>
+                <div class="batch-stat">
+                    <div class="batch-stat-val text-indigo" id="batch-avg-latency">2.1 ms</div>
+                    <div class="batch-stat-lbl">Average Latency</div>
+                </div>
+                <div class="batch-stat">
+                    <div class="batch-stat-val text-cyan" id="batch-offload-pct">96.7%</div>
+                    <div class="batch-stat-lbl">DB Offload</div>
+                </div>
+            </div>
+            <p class="batch-desc text-muted mt-3">
+                All 29 hits were served directly from Caffeine memory under 3ms. Only 1 query reached the physical database socket.
+            </p>
+            <div class="modal-actions">
+                <button class="btn btn-primary" onclick="closeBatchModal()">Done</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>
